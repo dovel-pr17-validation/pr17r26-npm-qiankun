@@ -1,0 +1,111 @@
+# @qiankunjs/shared
+
+Base utilities shared by `loader`/`sandbox`/`qiankun`: asset transpilers, fetch decorators, module resolution, error reporting, and the **ESM-sandbox engine**. No internal `@qiankunjs/*` dependencies — keep it at the bottom of the graph (it must never import `sandbox` or `loader`).
+
+## STRUCTURE
+
+```
+shared/
+├── assets-transpilers/   # transform script/link/style DOM nodes for the micro-frontend runtime
+│   ├── index.ts          # transpileAssets(node, baseURI, opts) — dispatch by tagName
+│   ├── script.ts         # classic scripts → blob-URL wrapping, sandbox scope
+│   ├── link.ts           # external stylesheets → blob-<link> (enables @scope); preload/URL rewriting; cache
+│   └── style.ts          # inline <style> → CSS @scope rewriting (runtime style isolation)
+├── esm-sandbox/          # per-instance native-ESM execution engine (see below)
+├── fetch-utils/          # higher-order fetch decorators
+│   ├── makeFetchCacheable.ts   # two runtime-wide LRUs (assets 50 / modules 512), clones responses, prunes failures
+│   ├── makeFetchRetryable.ts   # automatic retries
+│   └── makeFetchThrowable.ts   # non-2xx → throw
+├── module-resolver/      # shared-dependency canonicalization (semver via <script type="dependencymap">)
+├── reporter/             # QiankunError + logger (warn/…)
+├── deferred-queue/       # async task sequencing (defer-script ordering)
+├── common.ts / utils.ts  # Deferred, defineProperty, hasOwnProperty, keys, resolveUrl, …
+└── typings.d.ts
+```
+
+## ESM-SANDBOX (`esm-sandbox/`, the largest subsystem here)
+
+`EsmSandboxEngine` is the replaceable mechanism behind the sandbox package's Compartment module facade; it must not leak into loader or qiankun interfaces. It runs a micro-app's `<script type="module">` graph inside the sandbox membrane without a bundler. Pipeline: resolve through `resolveHook` → obtain and memoize a descriptor from `modules` or `importHook` / `loadHook` → fetch/lexer-rewrite source when needed → give modules synthetic specifiers → inject an **import map** → evaluate in dependency order → keep dunder-globals (`__qk_track`) live on later global writes.
+
+| File | Responsibility |
+| --- | --- |
+| `capability.ts` | Cached per-document dynamic import-map probe in a disposable same-origin iframe; rejects with `esm-unsupported` or `esm-capability-check-failed` before module loading |
+| `engine.ts` | `EsmSandboxEngine` — module-graph orchestration, redeclaration probing, in-order eval, dynamic `import()` |
+| `types.ts` | Public structural module contracts: hooks, descriptors, `ModuleSource`, Compartment facade |
+| `lexer.ts` | CSP-safe `es-module-lexer/js` wrapper; preparation Promise is already resolved |
+| `rewrite.ts` | `rewriteModule`, `buildSyntheticSpecifier`, `esmInternalPrefix`, `runtimeModuleSubpath` |
+| `import-bindings.ts` | import statement binding analysis |
+| `identifier-scan.ts` | `scanReferencedGlobals`, `isLiveBindableDunderName` — which globals a module touches |
+| `import-map-registry.ts` | `injectImportMapEntries`, `resetImportMapRegistry` — the dynamic import map |
+| `instance-registry.ts` | Per-engine instance/view lookup used by generated runtime modules |
+| `vite-client-stub.ts` | `isViteClientUrl`, `viteClientStubSource` — stubs Vite dev-client HMR |
+| `source-map.ts` | rewritten-module source-map fixups |
+
+> ESM sandbox depends on **dynamically injected import maps** → unsupported on Firefox (see `e2e/README.md`).
+
+## WHERE TO LOOK
+
+| Task | File | Notes |
+| --- | --- | --- |
+| Transpile any asset node | `assets-transpilers/index.ts` | `transpileAssets()` — the single dispatch entry |
+| Classic script sandboxing | `assets-transpilers/script.ts` | blob-URL wrap + sandbox scope |
+| Style isolation | `assets-transpilers/style.ts` + `link.ts` | CSS `@scope` rewrite; external CSS → blob-`<link>` |
+| Fetch enhancements | `fetch-utils/*` | decorator chain (compose with `make*` HOFs) |
+| Shared dependency reuse | `module-resolver/index.ts` | `moduleResolver(url, container, head)` semver match |
+| ESM module execution | `esm-sandbox/engine.ts` | `EsmSandboxEngine` (see section above) |
+| Module facade contracts | `esm-sandbox/types.ts` | The only ESM mechanism types cross-package callers should consume |
+| Promise/util helpers | `utils.ts` | `Deferred`, `keys`, `defineProperty`, `hasOwnProperty` |
+
+## KEY PATTERNS
+
+### Module hooks and descriptors
+
+- `resolveHook(specifier, referrer)` synchronously returns a canonical full specifier.
+- A `modules` descriptor wins before `importHook`; descriptors may provide precompiled `ModuleSource`, a namespace, or a redirect specifier.
+- `importHook(fullSpecifier)` is Promise-memoized, including failures. Probe-driven rebuilds reuse its result and do not call the hook again, so hooks must be idempotent.
+- A precompiled `ModuleSource` is already linked/re-written and skips the default fetch and rewrite pipeline.
+- Redirect cycles must fail deterministically; namespace descriptors keep their object identity.
+
+The engine may be imported by the sandbox implementation itself, but do not add it to `LoaderOpts`, asset-transpiler options, or other cross-package interfaces. Those use `CompartmentModuleFacade`.
+
+### Higher-order fetch (decorator composition)
+
+```typescript
+// makeFetchCacheable(fetch, { scope?: 'assets' | 'modules' = 'assets', signal?: AbortSignal })
+const lifetime = new AbortController();
+const resourceFetch = makeFetchRetryable(makeFetchThrowable(fetch));
+const enhancedFetch = makeFetchCacheable(resourceFetch, { signal: lifetime.signal }); // entries, classic scripts, styles
+const moduleSourceFetch = makeFetchCacheable(resourceFetch, { scope: 'modules', signal: lifetime.signal }); // passed as moduleHost.fetch
+// Release both wrappers' cache ownership when the application is permanently unloaded.
+enhancedFetch.invalidate();
+moduleSourceFetch.invalidate();
+```
+
+Each `scope` maps to one LRU shared by the whole runtime copy: `assets` holds 50 responses and `modules` holds 512, so a large module graph cannot evict entries and styles. Both key requests by canonical URL and effective `credentials`, cache in-flight Promises, clone responses per reader, and drop failed responses. `loadApp` passes the module-scoped fetch as `compartmentOptions.moduleHost.fetch`, which the sandbox prefers over the top-level `fetch` for module sources.
+
+`makeFetchCacheable` returns `CacheableFetch`, a callable fetch with `invalidate(): void`. A wrapper remembers download lease metadata independently of the LRU, plus the downloads it is still waiting on or reading; it never strongly retains finished responses, so LRU eviction still frees them. Invalidation releases every owned lease even if its entry was already evicted, evicts the touched entries by identity (a stale owner cannot remove a newer entry under the same key), cancels this wrapper's pending waits and in-progress body reads, and aborts an underlying request/body only when its last owner releases it. Each caller receives its own body branch: a call-level `init.signal` rejects that caller's wait or body read with the signal's reason, like a raw fetch, without aborting or evicting a download other callers still use. Aborting `options.signal` invalidates the wrapper's ownership and rejects future calls; calling `invalidate()` alone leaves the wrapper reusable for new calls.
+
+### Terminal asset ownership
+
+`disposeCompartmentAssets(owner: object): void` is an idempotent owner-release operation exported through `assets-transpilers/index.ts`. Transpilers key their scope by `opts.compartment ?? opts.fetch`: the scope owns cancellation, pending script callbacks, reusable blob URLs, and registered cleanup callbacks. `attachChildAssetOwner(parent, child)` links a shorter-lived owner to a reusable one. Disposing the parent disposes its children. Disposing a child releases only that child and unregisters it from the parent, so the parent is not poisoned and does not keep released children. The loader uses it for its per-load fetch wrapper when no compartment is given. `link.ts` registers stylesheet-cache cleanup with that scope and revokes shared style blobs only after their last owner releases them. The actual script/style logic stays in `shared/assets-transpilers`; callers only signal that the owner is terminal. Ordinary unmount must preserve this scope for warm remounts.
+
+### Import-map ownership
+
+`injectImportMapEntries(entries, targetDocument?)` returns an idempotent `() => void` release function. The engine retains these functions and invokes them on disposal. Releases decrement entry ownership, drop framework bookkeeping when no owner remains, and remove an injected script once none of its entries remain owned. They cannot retract mappings or modules already registered by the browser. `resetImportMapRegistry()` is a test-only bookkeeping reset, not a runtime unload API.
+
+### Deferred promise
+
+```typescript
+const d = new Deferred<void>();
+d.resolve();
+await d.promise;
+```
+
+### DOM as metadata store
+
+- `data-src` — original source URL of a transpiled node.
+- `data-consumed` — marks an already-processed element.
+
+## EXPORTS
+
+`src/index.ts` re-exports everything: `./assets-transpilers`, `./utils`, `./common`, `./module-resolver`, `./reporter`, `./esm-sandbox`, the three `fetch-utils/make*`, and `./deferred-queue`. Notable named exports: `transpileAssets`, `disposeCompartmentAssets`, the Compartment-shaped module contracts, the internal `EsmSandboxEngine` mechanism, `moduleResolver`, `makeFetchCacheable`, `CacheableFetch`, `makeFetchRetryable`, `makeFetchThrowable`, `Deferred`, `QiankunError`, `warn`.

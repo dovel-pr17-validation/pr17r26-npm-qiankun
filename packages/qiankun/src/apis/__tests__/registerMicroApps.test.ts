@@ -1,0 +1,99 @@
+/**
+ * @vitest-environment happy-dom
+ */
+import { describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  createSandbox: vi.fn(),
+  loadEntry: vi.fn(),
+}));
+
+vi.mock('@qiankunjs/loader', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  loadEntry: mocks.loadEntry,
+}));
+
+vi.mock('@qiankunjs/sandbox', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createSandbox: mocks.createSandbox,
+}));
+
+import { addErrorHandler, removeErrorHandler, triggerAppChange } from '@qiankunjs/single-spa';
+import { registerMicroApps, start } from '../registerMicroApps';
+
+describe('registerMicroApps', () => {
+  // Regression test for the vendored fork's canonical bootstrap lifecycle (the revert of the
+  // upstream bootstrap->init rename, see packages/single-spa/README.md): a micro app exporting
+  // the classic `bootstrap` lifecycle must have it invoked on the registerMicroApps path, where
+  // upstream v7 would silently ignore it.
+  it('invokes a micro app bootstrap lifecycle on the registerMicroApps path', async () => {
+    const bootstrap = vi.fn(async (_context: unknown): Promise<void> => {});
+    const mount = vi.fn(async (_props: unknown): Promise<void> => {});
+    const unmount = vi.fn(async (): Promise<void> => {});
+
+    mocks.createSandbox.mockReturnValue({
+      dispose: vi.fn(async () => {}),
+      instance: {
+        globalThis: window,
+        latestSetProp: undefined,
+      },
+      nodeTransformer: (node: Node) => node,
+      mount: vi.fn(async () => {}),
+      unmount: vi.fn(async () => {}),
+    });
+    mocks.loadEntry.mockResolvedValue({ bootstrap, mount, unmount });
+
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+
+    registerMicroApps([
+      {
+        name: 'legacy-bootstrap-app',
+        entry: '/legacy-bootstrap.html',
+        container,
+        props: { accountId: '42', entry: 'prop-entry', container: document.createElement('div') },
+        activeRule: () => true,
+      },
+    ]);
+    start();
+    await triggerAppChange();
+
+    expect(bootstrap).toHaveBeenCalledTimes(1);
+    expect(bootstrap.mock.calls[0][0]).toEqual({ name: 'legacy-bootstrap-app', entry: '/legacy-bootstrap.html' });
+    expect(Object.isFrozen(bootstrap.mock.calls[0][0])).toBe(true);
+    expect(mount).toHaveBeenCalledTimes(1);
+    expect(mount.mock.calls[0][0]).toMatchObject({ accountId: '42', container });
+  });
+
+  it('applies the per-app loadTimeout of a registered application', async () => {
+    const errors: Error[] = [];
+    const handler = (error: Error) => void errors.push(error);
+    addErrorHandler(handler);
+    try {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      registerMicroApps([
+        {
+          name: 'invalid-load-timeout-app',
+          entry: '/invalid-load-timeout.html',
+          container,
+          activeRule: () => true,
+          configuration: { loadTimeout: -1 },
+        },
+      ]);
+      start();
+      await triggerAppChange();
+
+      expect(mocks.loadEntry).not.toHaveBeenCalledWith(
+        '/invalid-load-timeout.html',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(errors.map((error) => error.message)).toContainEqual(
+        expect.stringContaining('loadTimeout must be a finite non-negative number'),
+      );
+    } finally {
+      removeErrorHandler(handler);
+    }
+  });
+});

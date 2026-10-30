@@ -1,0 +1,85 @@
+{
+  "name": "@qiankunjs/bundler-plugin",
+  "version": "0.0.1-rc.2",
+  "description": "Bundler plugins for qiankun micro-frontend framework",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umijs/qiankun.git",
+    "directory": "packages/bundler-plugin"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./webpack": {
+      "import": {
+        "types": "./dist/esm/webpack/index.d.ts",
+        "default": "./dist/esm/webpack/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/webpack/index.d.ts",
+        "default": "./dist/cjs/webpack/index.js"
+      }
+    },
+    "./vite": {
+      "import": {
+        "types": "./dist/esm/vite/index.d.ts",
+        "default": "./dist/esm/vite/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/vite/index.d.ts",
+        "default": "./dist/cjs/vite/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build:webpack4": "cd ./tests/webpack4 && npm install && pnpm run build",
+    "build:webpack5": "cd ./tests/webpack5 && npm install && pnpm run build",
+    "test": "pnpm run build && pnpm run build:webpack4 && pnpm run build:webpack5 && vitest --run",
+    "build": "rimraf dist && vite build --config ../../vite.library.config.ts && tsc -p tsconfig.build.json && node ../../scripts/copy-declarations.mjs src dist/esm && node ../../scripts/copy-declarations.mjs dist/esm dist/cjs && node ./scripts/mark-module-types.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "peerDependencies": {
+    "webpack": "^4.0.0 || ^5.0.0",
+    "vite": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "webpack": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
+  },
+  "author": "Hermanna",
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.2.0"
+  },
+  "devDependencies": {
+    "vite": "^8.1.5",
+    "webpack": "^5.108.4"
+  },
+  "homepage": "https://www.qiankunjs.com",
+  "bugs": {
+    "url": "https://github.com/umijs/qiankun/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "sideEffects": false
+}

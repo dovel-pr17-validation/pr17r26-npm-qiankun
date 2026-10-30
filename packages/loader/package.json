@@ -1,0 +1,53 @@
+{
+  "name": "@qiankunjs/loader",
+  "version": "0.1.0-rc.22",
+  "description": "Streaming HTML-entry loader for qiankun",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umijs/qiankun.git",
+    "directory": "packages/loader"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "rimraf dist && vite build --config ../../vite.library.exports.config.ts",
+    "bench": "pnpm run build && tachometer ./benchmarks/parser/tern/import-html-entry.html ./benchmarks/parser/tern/parser.html --timeout=1",
+    "test": "vitest --run"
+  },
+  "author": "Kuitos",
+  "license": "MIT",
+  "dependencies": {
+    "@qiankunjs/sandbox": "workspace:^",
+    "@qiankunjs/shared": "workspace:^"
+  },
+  "devDependencies": {
+    "import-html-entry": "^1.17.0",
+    "tachometer": "^0.7.2"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "homepage": "https://www.qiankunjs.com",
+  "bugs": {
+    "url": "https://github.com/umijs/qiankun/issues"
+  }
+}

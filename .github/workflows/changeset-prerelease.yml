@@ -1,0 +1,82 @@
+name: Changesets
+
+on:
+  push:
+    branches:
+      - next
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  changelog:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    environment: changeset-release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Full history + tags: the changeset/release-notes generators derive
+          # the release range from `git describe`/`git log` (see scripts/commit-utils.mjs).
+          fetch-depth: 0
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build Packages
+        run: pnpm run build
+
+      # Replaces the manual "write a .changeset/*.md per PR" step: derive the
+      # pending changesets from the complete unreleased commit range, so the
+      # changesets action below can rebuild its release PR from the base branch.
+      # Idempotent (files named auto-<sha>); over-wide ranges never duplicate.
+      - name: Generate changesets from commits
+        run: node scripts/generate-changesets.mjs
+
+      - name: Create Release Pull Request or Publish
+        id: changesets
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          commit: "chore: update versions"
+          title: "chore: update versions"
+          version: pnpm ci:version
+          publish: pnpm ci:publish
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PNPM_CONFIG_PROVENANCE: true
+
+      - name: Create Unified GitHub Release
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          VERSION=$(jq -r '.version' packages/qiankun/package.json)
+          TAG="v${VERSION}"
+
+          # Aggregate every published package's CHANGELOG entry into one set of
+          # notes → a single GitHub Release. It can then be polished after the
+          # fact via the /release-changelog skill (gh release edit).
+          node scripts/generate-release-notes.mjs '${{ steps.changesets.outputs.publishedPackages }}' > /tmp/release-notes.md
+
+          case "${VERSION}" in
+            *-*) RELEASE_FLAG="--prerelease" ;;
+            *) RELEASE_FLAG="--latest" ;;
+          esac
+
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes-file /tmp/release-notes.md \
+            "${RELEASE_FLAG}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

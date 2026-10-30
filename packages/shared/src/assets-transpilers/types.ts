@@ -1,0 +1,41 @@
+/**
+ * @author Kuitos
+ * @since 2023-08-26
+ */
+import type { BaseLoaderOpts } from '../common';
+import type { CompartmentModuleFacade } from '../esm-sandbox';
+import type { MatchResult } from '../module-resolver';
+import type { Deferred } from '../utils';
+
+export type StyleIsolationOpts = {
+  appName: string;
+  scopeRoot: string;
+};
+
+export type BaseTranspilerOpts = BaseLoaderOpts & {
+  moduleResolver?: (url: string) => MatchResult | undefined;
+  /** @internal synchronous bridge used by the streaming classic-script transform. */
+  classicScriptTransformer?: (source: string, sourceURL?: string) => string;
+  /** Compartment-shaped module facade; the ESM mechanism stays private to the sandbox package. */
+  compartment?: CompartmentModuleFacade;
+  styleIsolation?: StyleIsolationOpts;
+};
+
+export type AssetsTranspilerOpts = BaseTranspilerOpts;
+
+export type NodeTransformer = <T extends Node>(node: T, opts: Omit<AssetsTranspilerOpts, 'moduleResolver'>) => T;
+
+export type ScriptTranspilerOpts = AssetsTranspilerOpts &
+  (
+    | { prevScriptTranspiledDeferred: Deferred<void>; scriptTranspiledDeferred: Deferred<void> }
+    | { prevScriptTranspiledDeferred?: undefined; scriptTranspiledDeferred?: undefined }
+  );
+
+export enum Mode {
+  REMOTE_ASSETS_IN_SANDBOX = 'RAIS',
+  REMOTE_ASSETS = 'RA',
+  REUSED_DEP_IN_SANDBOX = 'RDIS',
+  REUSED_DEP = 'RD',
+  INLINE_CODE_IN_SANDBOX = 'ICIS',
+  NONE = 'NONE',
+}

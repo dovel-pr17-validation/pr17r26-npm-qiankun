@@ -1,0 +1,53 @@
+pids
+logs
+node_modules
+npm-debug.log
+coverage/
+run
+dist
+.DS_Store
+.nyc_output
+config.local.js
+.umi
+.umi-production
+.idea/
+.vscode/
+.cache
+yarn.lock
+es
+lib
+package-lock.json
+.eslintcache
+.history
+.worktrees
+.now
+.pnpm-store
+*.log
+packages/qiankun/src/version.ts
+packages/sandbox/src/core/sandbox/globals.ts
+.dumi/tmp
+.dumi/tmp-test
+.dumi/tmp-production
+
+# aggregated examples site (scripts/build-examples-site.mjs)
+dist-examples/
+# Pages Functions for that site, generated next to it (wrangler resolves `functions/` from the repo root)
+/functions/
+
+# playwright e2e artifacts
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+
+# local benchmark artifacts
+benchmark/artifacts/
+benchmark/results/
+
+# typescript incremental build info
+*.tsbuildinfo
+
+# VitePress build cache
+docs/.vitepress/cache
+
+# wrangler pages dev scratch (local simulation of the examples site)
+.wrangler/

@@ -1,0 +1,127 @@
+/**
+ * @author Kuitos
+ * @since 2023-04-25
+ */
+import type { LoaderOpts } from '@qiankunjs/loader';
+import type { CreateSandboxOptions } from '@qiankunjs/sandbox';
+import type { LifeCycles as ParcelLifeCycles, Parcel, RegisterApplicationConfig } from '@qiankunjs/single-spa';
+
+export type {
+  Compartment,
+  CompartmentGlobals,
+  CompartmentOptions,
+  CreateSandboxOptions,
+  Free,
+  ImportHook,
+  IsolationPlugin,
+  IsolationPluginConfig,
+  IsolationPluginContext,
+  ModuleDescriptor,
+  ModuleNamespace,
+  Modules,
+  ModuleSource,
+  PrecompileModuleSourceOpts,
+  ResolveHook,
+  Rebuild,
+  SandboxContainerPreparation,
+  SandboxController,
+  UnshadowableGlobals,
+} from '@qiankunjs/sandbox';
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+  interface Window {
+    __POWERED_BY_QIANKUN__?: boolean;
+    __INJECTED_PUBLIC_PATH_BY_QIANKUN__?: string;
+    __QIANKUN_DEVELOPMENT__?: boolean;
+    Zone?: CallableFunction;
+    __zone_symbol__setTimeout?: Window['setTimeout'];
+  }
+}
+
+export type ObjectType = Record<string, unknown>;
+
+export type HTMLEntry = string;
+
+export type AppMetadata = {
+  // app name
+  name: string;
+  // app entry
+  entry: HTMLEntry;
+};
+
+// just for manual loaded apps, in single-spa it called parcel
+export type LoadableApp<T extends ObjectType> = AppMetadata & {
+  // where the app mount to
+  container: HTMLElement;
+  // props pass to app
+  props?: T;
+  /**
+   * Loading indicator, called with true when the mount chain starts (the container gate wait
+   * included) and false once the app is mounted. Runs inside the chain's failure fallback.
+   */
+  loader?: (loading: boolean) => void;
+};
+
+// for the route-based apps
+export type RegistrableApp<T extends ObjectType> = LoadableApp<T> & {
+  activeRule: RegisterApplicationConfig['activeWhen'];
+  // per-app loading configuration (sandbox, styleIsolation, fetch, ...), merged over the framework defaults
+  configuration?: AppConfiguration;
+};
+
+/**
+ * The umbrella configuration for the JS sandbox — structurally a public projection of
+ * `CompartmentOptions` plus two qiankun host extensions (`plugins`, `styleIsolation`).
+ */
+export type SandboxConfiguration = Pick<
+  CreateSandboxOptions,
+  'globals' | 'incubatorContext' | 'modules' | 'resolveHook' | 'importHook' | 'loadHook' | 'plugins' | 'styleIsolation'
+>;
+
+export type AppConfiguration = Partial<Pick<LoaderOpts, 'fetch' | 'streamTransformer' | 'nodeTransformer'>> & {
+  /**
+   * Loading budget in milliseconds, counted from acquiring the container until the entry is
+   * fully streamed and its lifecycles are resolved. It does not bound bootstrap, mount, or
+   * unmount. Zero disables it (default).
+   */
+  loadTimeout?: number;
+  /**
+   * JS sandbox switch and configuration.
+   * `false` disables isolation entirely; `true` (the default) enables it with defaults;
+   * an object enables it and configures the underlying Compartment.
+   */
+  sandbox?: boolean | SandboxConfiguration;
+};
+
+export type LifeCycleFn<T extends ObjectType> = (app: LoadableApp<T>, global: WindowProxy) => Promise<void>;
+export type LifeCycles<T extends ObjectType> = {
+  beforeLoad?: LifeCycleFn<T> | Array<LifeCycleFn<T>>; // function before app load
+  beforeMount?: LifeCycleFn<T> | Array<LifeCycleFn<T>>; // function before app mount
+  afterMount?: LifeCycleFn<T> | Array<LifeCycleFn<T>>; // function after app mount
+  beforeUnmount?: LifeCycleFn<T> | Array<LifeCycleFn<T>>; // function before app unmount
+  afterUnmount?: LifeCycleFn<T> | Array<LifeCycleFn<T>>; // function after app unmount
+};
+
+export type MicroApp = Parcel & {
+  /**
+   * Dispose of the loaded instance this handle uses, retiring every handle that shares it. Other
+   * instances of the same app are unaffected. Idempotent.
+   */
+  unload(): Promise<void>;
+};
+
+/** Stable identity of one evaluated app instance; excludes per-mount props and container. */
+export type BootstrapContext = Readonly<AppMetadata>;
+
+type ExtraProps = {
+  container: HTMLElement;
+};
+type FlattenArray<T> = T extends Array<infer U> ? U : T;
+type FlattenArrayValue<T> = {
+  [P in keyof T]: FlattenArray<T[P]>;
+};
+
+export type MicroAppLifeCycles = Omit<FlattenArrayValue<ParcelLifeCycles<ExtraProps>>, 'bootstrap'> & {
+  bootstrap: (context: BootstrapContext) => Promise<unknown>;
+};

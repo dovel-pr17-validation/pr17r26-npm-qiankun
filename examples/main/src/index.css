@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-paper: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-ink: #1b1f26;
+  --color-ink-soft: #5c6470;
+  --color-hairline: #e4e7ec;
+  /* the two logo colors. Purple carries every text and interactive use (6.5:1 on white);
+     amber only ever fills — at 2.2:1 it can never be type. */
+  --color-primary: #6051a5;
+  --color-primary-deep: #4a3d80;
+  --color-amber: #e5a540;
+  /* functional, never decorative: these two say "broken" and "healthy", so they stay
+     outside the brand palette */
+  --color-danger: #d93026;
+  --color-success: #16a34a;
+
+  /* latin display face: geometric grotesque, reads developer-tool not literary */
+  --font-display: 'Space Grotesk', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  /* hanzi ornament only (the 乾坤 watermark & seal) */
+  --font-ornament: 'Songti SC', 'STSong', serif;
+  --font-sans: 'IBM Plex Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
+
+  --shadow-stage: 0 1px 2px rgb(27 31 38 / 4%), 0 8px 24px rgb(27 31 38 / 6%);
+}
+
+html {
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* the stage lifts in once per mount; a veil covers loading */
+@keyframes stage-lift {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stage-lift {
+  animation: stage-lift 280ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-lift {
+    animation: none;
+  }
+}

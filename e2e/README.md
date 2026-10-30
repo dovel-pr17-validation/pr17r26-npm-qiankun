@@ -1,0 +1,87 @@
+# qiankun e2e
+
+Browser end-to-end tests built on [Playwright](https://playwright.dev). They exercise the **built artifacts** of the workspace packages (`pnpm build` output) through real cross-origin app loading, which is exactly what unit tests running in happy-dom cannot cover.
+
+## Layout
+
+```
+e2e/
+├── ports.ts            # single source of truth for all fixture ports
+├── playwright.config.ts # webServer array boots main + all sub apps automatically
+├── servers/serve.mjs    # zero-dep static server with CORS (real cross-origin deployment shape);
+│                        # /__e2e__/request-count endpoints let tests assert per-path server hits
+│                        # (e.g. the modulepreload warm-up being reused from the preload cache)
+├── fixtures/
+│   ├── main/            # vite-built main app, bundles the local `qiankun` package,
+│   │                    # exposes window.__E2E__ for tests to drive loadMicroApp imperatively
+│   ├── sub-classic/     # classic global-lifecycle sub app (the UMD shape), no build step
+│   ├── sub-esm/         # native ESM sub app with a multi-module graph, no build step;
+│   │                    # preload.html variant carries a <link rel="modulepreload"> (vite output shape)
+│   ├── sub-misbehaving/ # deliberately bad app: mount errors + leaked intervals (via props)
+│   └── sub-nested/      # vite-built classic app that is itself a qiankun host: it bundles its own
+│                        # copy of qiankun and mounts sub-classic-bodyless inside its own DOM
+└── tests/               # suites organized by framework invariants, not by pages
+```
+
+The standalone suite serves the built `examples/standalone-sandbox` app as an additional fixture. It imports only `@qiankunjs/sandbox` and exercises classic scripts, ESM, dynamic DOM, style isolation, and cleanup under a CSP without `unsafe-eval`.
+
+The main fixture serves two pages: `index.html` (imperative `loadMicroApp` playground driven via `window.__E2E__`) and `register.html` (`registerMicroApps` + hash-based `activeRule` routing mode).
+
+Suites map to qiankun's core promises:
+
+- `lifecycle` — mount/unmount/remount, lifecycle caching (scripts must not re-execute on a warm remount)
+- `instance-cache` — idle expiry releases real sandboxes, old handles cold-load after reclamation, and disposal preserves a successor's DOM
+- `unload` — terminal disposal of a name/container generation: queued-handle cancellation, fresh entry requests and evaluation on reload, native response-body cancellation, container handoff, and registered-application unload
+- `sandbox-js` — window pollution stays inside the sandbox, main-realm globals stay readable, leaked intervals reclaimed on unmount
+- `esm-sandbox` — ESM entry lifecycles, sandboxed module graph, namespace caching across remounts
+- `style-isolation` — `@scope` based CSS isolation, with a control test documenting the unisolated leak
+- `error-handling` — 404 entries and throwing mounts reject cleanly without breaking the main app
+- `multi-instance` — same app twice in independent sandboxes, mixed classic + esm coexistence
+- `nested-sandbox` — qiankun inside qiankun: DOM ownership under chained document proxies (each app owns what its own container receives, including a node the outer app hands to the inner container)
+- `router-mode` — route-driven mount/unmount/switch including history back
+- `container-gate` — container occupancy serialization: waiting takeover, cross-app remount handoff, no-await races, mount/unmount-failure fallback release
+- `standalone-sandbox` — direct package use without qiankun/loader, including the no-`unsafe-eval` CSP path
+
+## Fixture network controls
+
+`servers/serve.mjs` exposes these controls on each sub-app server; construct URLs from `ports.ts`:
+
+- `/__e2e__/request-count?path=<pathname>` returns `{ count }` for that decoded path; query strings do not create separate counters.
+- `/__e2e__/reset-request-count?path=<pathname>` removes that path's counter and responds with status 204. Both counter endpoints require `path` and respond with 400 if it is missing.
+- An HTML request with `?open-entry-stream=<key>` sends the entry through its lifecycle script but leaves the HTML tail and HTTP response open. Use a distinct key per case and unload the handle to cancel the native body.
+- `/__e2e__/entry-stream-state?key=<key>` returns `{ opened, closed }`; both are false before the stream opens, and `closed` becomes true when the response connection closes. Assert this with `expect.poll` to verify actual network cancellation rather than only a rejected application promise.
+
+## Browser matrix
+
+PRs run chromium only (`ci.yml`). The full chromium + webkit + firefox matrix runs nightly and on demand via the `E2E Full Browser Matrix` workflow.
+
+Nightly runs check out `next`; manual runs test the selected branch or tag at the dispatched commit, so PR changes can be validated before merging.
+
+Both E2E workflows use Ubuntu 24.04. The shared setup action keys browser caches by distribution version, architecture, and Playwright version: WebKit binaries for different Ubuntu releases can share a revision directory but require different system libraries. Keep `playwright install --with-deps` running even on cache hits so each runner installs its system dependencies.
+
+Known engine limitation: the ESM sandbox relies on dynamically injected import maps, which **Firefox does not support yet**. Every test that mounts `sub-esm` carries a `test.fail(browserName === 'firefox', FIREFOX_ESM_LIMITATION)` annotation — an _expected failure_, not a skip. The day Firefox starts passing, playwright reports "passed unexpectedly" so we know to lift the annotations.
+
+## Running
+
+```bash
+# from repo root: builds all packages first, then runs chromium suite
+pnpm run test:e2e
+
+# from e2e/: assumes packages are already built
+pnpm run test:e2e        # chromium only (what CI runs on PRs)
+pnpm run test:e2e:all    # chromium + webkit + firefox (install browsers first)
+pnpm run test:e2e:ui     # playwright UI mode for debugging
+```
+
+First time only: `npx playwright install chromium` (or `--with-deps` on linux).
+
+Sub-app fixtures are served directly from source. `fixtures/main`, `fixtures/sub-nested`, and `examples/standalone-sandbox` need builds (`pnpm run build:fixtures`, done automatically by the test scripts). Note that `ports.ts` is bundled into the built fixtures, so changing it requires rebuilding them. After changing any `packages/*` source, rebuild the packages and both built fixtures, since they bundle the local workspace code.
+
+## Rules (anti-flake discipline)
+
+1. Never `waitForTimeout` — use web-first assertions (`expect(locator).…` retries automatically).
+2. Tests are independent: each starts from `page.goto('/')`, no shared state, no ordering.
+3. Fixtures must stay dependency-free and deterministic: no CDN assets, no frameworks unless the suite explicitly targets a ui-binding, no timers in the happy path.
+4. All ports come from `ports.ts`; never hardcode a port anywhere else.
+5. Retries are CI-only (`retries: 2`). If a test flakes locally, fix it, don't rerun it.
+6. Assert sandbox behavior via `page.evaluate` probes on the main realm + DOM markers rendered by the sub apps — precise assertions, not screenshots.

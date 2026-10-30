@@ -1,0 +1,48 @@
+{
+  "name": "@qiankunjs/sandbox",
+  "version": "0.1.0-rc.18",
+  "description": "qiankun sandbox",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umijs/qiankun.git",
+    "directory": "packages/sandbox"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "rimraf dist && vite build --config ../../vite.library.exports.config.ts",
+    "test": "vitest --run"
+  },
+  "files": [
+    "dist"
+  ],
+  "author": "Kuitos",
+  "license": "MIT",
+  "dependencies": {
+    "@qiankunjs/shared": "workspace:^",
+    "lodash": "^4.18.1"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://www.qiankunjs.com",
+  "bugs": {
+    "url": "https://github.com/umijs/qiankun/issues"
+  }
+}

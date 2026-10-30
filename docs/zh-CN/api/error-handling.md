@@ -1,0 +1,122 @@
+# addErrorHandler / removeErrorHandler
+
+这两个函数用于注册和移除 single-spa 的全局错误处理器。处理器主要接收路由驱动应用（经 `registerMicroApps` 注册）在加载和生命周期执行中产生的错误。移除处理器时必须传入注册时使用的同一函数引用。qiankun 直接导出 single-spa 的对应函数，不改变其行为。
+
+该 API 适合用于集中记录路由驱动应用的日志和上报监控数据。通过 `loadMicroApp` 创建的实例不会在首次加载或生命周期失败时调用该全局处理器，应通过实例句柄中的 Promise 处理相应错误。面向用户的错误恢复界面应由负责该区域的 `loadMicroApp` 调用方或 `<MicroApp>` 组件处理。
+
+## 函数签名
+
+```ts
+type AppError = Error & {
+  appOrParcelName: string;
+};
+
+function addErrorHandler(handler: (error: AppError) => void): void;
+function removeErrorHandler(handler: (error: AppError) => void): void;
+```
+
+`appOrParcelName` 标识与错误关联的应用或实例。`removeErrorHandler` 按函数引用匹配，因此内容相同的新函数不能注销原来的处理器。
+
+## 使用方式
+
+在主应用启动阶段注册一次错误处理器：
+
+```ts
+import { addErrorHandler, removeErrorHandler } from 'qiankun';
+
+type AppError = Error & { appOrParcelName: string };
+
+const reportMicroAppError = (error: AppError) => {
+  reportToMonitoring(error, {
+    app: error.appOrParcelName,
+  });
+};
+
+addErrorHandler(reportMicroAppError);
+
+// 主应用清理或测试结束时：
+removeErrorHandler(reportMicroAppError);
+```
+
+由 `registerMicroApps` 注册的路由驱动应用会将入口加载失败和生命周期 Promise 被拒绝的错误传递给该处理器。`loadMicroApp` 使用 single-spa 的 Parcel 加载流程，其首次加载和生命周期错误只会反映在实例句柄对应的 Promise 中，不会传递给全局处理器。
+
+该处理器作用于全局，不负责界面渲染。实例级界面应单独监听返回句柄中的 Promise：
+
+```ts
+import { loadMicroApp } from 'qiankun';
+
+const microApp = loadMicroApp({ name, entry, container });
+
+void microApp.mountPromise.catch((error: unknown) => {
+  showFallback(container, error);
+});
+```
+
+应保留 `MicroApp` 句柄，并在移除已挂载的视图时调用 `unmount()`。
+
+## 处理加载超时 {#load-timeout}
+
+启用 [`loadTimeout`](/zh-CN/api/configuration#loadtimeout) 后，加载超时会产生 `LoadAppTimeoutError`。该类从 `qiankun` 导出，继承 `QiankunError`，提供以下只读字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `appName` | `string` | 加载超时的微应用名称。 |
+| `loadTimeout` | `number` | 配置的时限，单位为毫秒。 |
+| `elapsed` | `number` | 从开始计时到超时触发的实际耗时，单位为毫秒。 |
+
+手动加载的应用应捕获句柄 Promise 的拒绝；路由应用可在全局错误处理器中使用相同的类型判断：
+
+```ts
+import { LoadAppTimeoutError, loadMicroApp } from 'qiankun';
+
+const app = loadMicroApp({ name, entry, container }, { loadTimeout: 10_000 });
+
+try {
+  await app.mountPromise;
+} catch (error) {
+  if (error instanceof LoadAppTimeoutError) {
+    reportToMonitoring(error, {
+      app: error.appName,
+      loadTimeout: error.loadTimeout,
+      elapsed: error.elapsed,
+    });
+  }
+  showFallback(container, error);
+}
+```
+
+超时失败前，qiankun 会中止该次加载、清理部分写入的节点和沙箱，并释放容器。重试时应重新调用 `loadMicroApp` 创建实例；不要继续挂载已经失败的句柄。`loadTimeout` 只限制加载阶段，不限制微应用的 `bootstrap`、`mount` 或 `unmount` 生命周期。
+
+`LoadAppTimeoutError` 的 `code` 为 `load-timeout`，超时配置无效时则抛出 `code` 为 `load-timeout-invalid` 的 `QiankunError`。排查方法分别见 [load-timeout：微应用加载超时](/zh-CN/errors/load-timeout) 和 [load-timeout-invalid：加载超时配置无效](/zh-CN/errors/load-timeout-invalid)。
+
+## 处理器职责
+
+- 处理器在上报错误后应正常返回，避免再次抛出错误；
+- 不应通过全局错误处理器启动无限重试；
+- 不应向用户显示原始调用栈或包含敏感信息的响应；
+- 生产构建应保留源码映射（source map），以便监控系统还原转换后的应用调用栈。
+
+React 和 Vue 的 `<MicroApp>` 组件可通过各自的错误边界选项提供组件级错误界面。这些组件基于 `loadMicroApp`，因此应由组件自身处理实例错误，不能依赖全局处理器接收同一错误。
+
+## QiankunError
+
+qiankun 自身抛出的框架错误可通过顶层导出的 `QiankunError` 识别。loader、沙箱及共享模块抛出的框架错误都是它的实例，只读的 `code` 属性提供稳定错误码。
+
+```ts
+import { QiankunError } from 'qiankun';
+
+void microApp.mountPromise.catch((error: unknown) => {
+  if (error instanceof QiankunError) {
+    reportToMonitoring(error, { code: error.code });
+  }
+  showFallback(container, error);
+});
+```
+
+微应用自身抛出的错误、浏览器网络异常和 single-spa 错误不一定是 `QiankunError`，仍需处理。错误码约定及各错误的排查方法见[错误码与解决办法](/zh-CN/errors/)。
+
+## 相关内容
+
+- [处理微应用错误](/zh-CN/cookbook/handle-errors)——错误界面、诊断与重试建议。
+- [`loadMicroApp`](/zh-CN/api/load-micro-app)——实例 Promise 与清理。
+- [React `<MicroApp>`](/zh-CN/ecosystem/react) 和 [Vue `<MicroApp>`](/zh-CN/ecosystem/vue)——组件错误边界。
